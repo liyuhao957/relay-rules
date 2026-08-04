@@ -181,7 +181,3 @@ Matching is word-boundary precise: `ProductCard.tsx` won't trip the production r
 5. **Grow** *(agent-driven).* As code changes, the two scan scripts surface possibly stale docs and new candidates, and the agent verifies, confirms unchanged, rejects, or marks `needs-user`.
 
 </details>
-
-## Friendly Links
-
-- [linux.do](https://linux.do/)

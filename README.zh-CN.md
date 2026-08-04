@@ -181,7 +181,3 @@ drift-map.yml                「改了哪些路径要复查哪些文档」的映
 5. **生长**（agent 驱动）。代码变化时，两个扫描脚本浮出可能过时的文档和新的候选，agent 逐条查实、确认未变、拒绝，或标 `needs-user`。
 
 </details>
-
-## 友情链接
-
-- [linux.do](https://linux.do/)
