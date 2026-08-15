@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from lib import run_cli, write
+from lib import run_cli, tree_snapshot, write
 
 
 LEGACY_CLAUDE_HOOK = {
@@ -67,10 +68,24 @@ def seed_legacy(target: Path, *, with_preinstall: bool = True) -> None:
 
 
 class MigrationTests(unittest.TestCase):
+    def test_legacy_dry_run_previews_migration_and_new_context_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            seed_legacy(target)
+            before = tree_snapshot(target)
+
+            result = run_cli("install", "--target", str(target), "--dry-run")
+            self.assertIn("back up legacy install", result.stdout)
+            self.assertIn("write .relay/index.md", result.stdout)
+            self.assertIn("write .relay/manifest.json", result.stdout)
+            self.assertEqual(before, tree_snapshot(target))
+            self.assertFalse(list((target / ".rules-kit/backups").glob("relay-migrate-*")))
+
     def test_install_migrates_legacy_state_with_a_recoverable_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp)
             seed_legacy(target)
+            write(target / "AGENTS.override.md", "# Existing Codex override\n")
             run_cli("install", "--target", str(target))
 
             backups = list((target / ".rules-kit/backups").glob("relay-migrate-*"))
@@ -86,8 +101,14 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("# Original team rules", agents)
             self.assertNotIn("old Relay Rules AGENTS", agents)
             self.assertIn("<!-- relay-rules:start -->", agents)
+            override = (target / "AGENTS.override.md").read_text()
+            self.assertIn("# Existing Codex override", override)
+            self.assertIn("<!-- relay-rules:start -->", override)
             self.assertFalse((target / ".agent").exists())
-            self.assertFalse((target / ".relay/manifest.json").exists())
+            manifest = json.loads((target / ".relay/manifest.json").read_text())
+            self.assertEqual(2, manifest["schema"])
+            self.assertEqual(backup.relative_to(target).as_posix(), manifest["legacyBackup"])
+            self.assertIn("Status: pending", (target / ".relay/index.md").read_text())
             self.assertFalse((target / "scripts/check-doc-drift.py").exists())
             self.assertFalse((target / ".claude/skills/implement").exists())
             self.assertTrue((target / ".claude/skills/custom/SKILL.md").is_file())
@@ -127,6 +148,51 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("Cannot safely remove legacy hooks", result.stderr)
             self.assertEqual(before, (target / "AGENTS.md").read_text())
             self.assertFalse(list((target / ".rules-kit/backups").glob("relay-migrate-*")))
+
+    def test_new_context_conflict_fails_before_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            seed_legacy(target)
+            write(target / ".relay/workflows/adapt.md", "owned by another tool\n")
+            before = tree_snapshot(target)
+
+            result = run_cli("install", "--target", str(target), check=False)
+            self.assertEqual(1, result.returncode)
+            self.assertIn("Unmanaged file conflicts", result.stderr)
+            self.assertEqual(before, tree_snapshot(target))
+            self.assertTrue((target / ".agent/rules-kit.json").is_file())
+            self.assertFalse(list((target / ".rules-kit/backups").glob("relay-migrate-*")))
+
+    def test_restored_context_conflict_fails_before_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            seed_legacy(target)
+            preinstall = target / ".rules-kit/backups/original"
+            write(preinstall / ".relay/index.md", "# Another tool owns this file\n")
+            before = tree_snapshot(target)
+
+            result = run_cli("install", "--target", str(target), check=False)
+            self.assertEqual(1, result.returncode)
+            self.assertIn("preInstallBackup conflicts", result.stderr)
+            self.assertEqual(before, tree_snapshot(target))
+            self.assertTrue((target / ".agent/rules-kit.json").is_file())
+            self.assertFalse(list((target / ".rules-kit/backups").glob("relay-migrate-*")))
+
+    def test_legacy_restore_preserves_a_claude_agents_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            seed_legacy(target)
+            restored_claude = target / ".rules-kit/backups/original/CLAUDE.md"
+            restored_claude.unlink()
+            try:
+                restored_claude.symlink_to("AGENTS.md")
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            run_cli("install", "--target", str(target))
+            self.assertTrue((target / "CLAUDE.md").is_symlink())
+            self.assertEqual("AGENTS.md", os.readlink(target / "CLAUDE.md"))
+            run_cli("doctor", "--target", str(target))
 
 
 if __name__ == "__main__":

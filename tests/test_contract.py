@@ -11,13 +11,24 @@ class ContractTests(unittest.TestCase):
         result = run_cli("validate-template")
         self.assertIn("is valid", result.stdout)
 
-    def test_source_footprint_is_intentionally_small(self) -> None:
-        self.assertFalse((ROOT / "templates/project").exists())
+    def test_source_footprint_is_fixed_and_project_aware(self) -> None:
         self.assertFalse((ROOT / "templates/skills").exists())
         files = sorted(path for path in (ROOT / "templates").rglob("*") if path.is_file())
-        self.assertEqual(1, len(files))
+        self.assertEqual(
+            {
+                "templates/core/AGENTS.md",
+                "templates/project/.relay/index.md",
+                "templates/project/.relay/project.md",
+                "templates/project/.relay/workflows/adapt.md",
+                "templates/project/.relay/workflows/maintain.md",
+            },
+            {path.relative_to(ROOT).as_posix() for path in files},
+        )
         core_lines = (ROOT / "templates/core/AGENTS.md").read_text().splitlines()
-        self.assertLessEqual(len(core_lines), 40)
+        self.assertLessEqual(len(core_lines), 50)
+        core = "\n".join(core_lines)
+        self.assertIn(".relay/index.md", core)
+        self.assertIn(".relay/workflows/maintain.md", core)
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("*.cmd text eol=crlf", attributes)
         self.assertIn("*.sh text eol=lf", attributes)
@@ -72,6 +83,15 @@ class ContractTests(unittest.TestCase):
                 run_wrapper(ROOT / "tests/run.cmd", "--help").returncode,
             )
 
+        workflow = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+        self.assertIn("Verify Bash lifecycle", workflow)
+        self.assertIn("install-rules.sh --target", workflow)
+        self.assertIn("uninstall-rules.sh --target", workflow)
+        self.assertIn("Verify PowerShell lifecycle", workflow)
+        self.assertIn("Verify Command Prompt lifecycle", workflow)
+        self.assertGreaterEqual(workflow.count("install-rules.cmd --target"), 2)
+        self.assertGreaterEqual(workflow.count("uninstall-rules.cmd --target"), 2)
+
     def test_install_has_one_mode_and_defaults_to_the_current_directory(self) -> None:
         help_text = run_cli("install", "--help").stdout
         self.assertIn("default: current directory", help_text)
@@ -79,6 +99,23 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("--agents", help_text)
         self.assertNotIn("--upgrade", help_text)
         self.assertNotIn("--force", help_text)
+
+        doctor_help = run_cli("doctor", "--help").stdout
+        self.assertIn("--require-adapted", doctor_help)
+
+    def test_readmes_describe_the_project_aware_cross_platform_contract(self) -> None:
+        for name in ("README.md", "README.zh-CN.md"):
+            with self.subTest(name=name):
+                text = (ROOT / name).read_text(encoding="utf-8")
+                self.assertIn(".relay/index.md", text)
+                self.assertIn(".relay/project.md", text)
+                self.assertIn("AGENTS.override.md", text)
+                self.assertIn("--require-adapted", text)
+                self.assertIn("Windows PowerShell", text)
+                self.assertIn("code.claude.com/docs/en/memory", text)
+                self.assertIn("learn.chatgpt.com/docs/agent-configuration/agents-md", text)
+                self.assertNotIn("One command. Two files.", text)
+                self.assertNotIn("一条命令，2 个文件", text)
 
 
 if __name__ == "__main__":

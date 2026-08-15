@@ -22,11 +22,42 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python tests/run.py --all
-      - name: Verify PowerShell entry point
+      - name: Verify Bash lifecycle
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          target="$RUNNER_TEMP/relay shell project"
+          mkdir -p "$target"
+          ./scripts/install-rules.sh --target "$target"
+          ./scripts/validate-installed-project.sh --target "$target"
+          ./scripts/uninstall-rules.sh --target "$target"
+          [[ -z "$(find "$target" -mindepth 1 -print -quit)" ]]
+      - name: Verify PowerShell lifecycle
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\scripts\validate-rules-template.cmd
-      - name: Verify Command Prompt entry point
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "relay powershell project"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          & .\scripts\install-rules.cmd --target $target
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\scripts\validate-installed-project.cmd --target $target
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\scripts\uninstall-rules.cmd --target $target
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-ChildItem -Force $target | Measure-Object).Count -ne 0) {
+            throw "PowerShell lifecycle left files in $target"
+          }
+      - name: Verify Command Prompt lifecycle
         if: runner.os == 'Windows'
         shell: cmd
-        run: scripts\validate-rules-template.cmd
+        run: |
+          set "target=%RUNNER_TEMP%\relay cmd project"
+          mkdir "%target%"
+          call scripts\install-rules.cmd --target "%target%"
+          if errorlevel 1 exit /b %errorlevel%
+          call scripts\validate-installed-project.cmd --target "%target%"
+          if errorlevel 1 exit /b %errorlevel%
+          call scripts\uninstall-rules.cmd --target "%target%"
+          if errorlevel 1 exit /b %errorlevel%
+          for /f %%A in ('dir /b /a "%target%" 2^>nul') do exit /b 1
+          exit /b 0
