@@ -13,18 +13,18 @@ class ContractTests(unittest.TestCase):
 
     def test_source_footprint_is_intentionally_small(self) -> None:
         self.assertFalse((ROOT / "templates/project").exists())
+        self.assertFalse((ROOT / "templates/skills").exists())
         files = sorted(path for path in (ROOT / "templates").rglob("*") if path.is_file())
-        self.assertEqual(4, len(files))
+        self.assertEqual(1, len(files))
         core_lines = (ROOT / "templates/core/AGENTS.md").read_text().splitlines()
         self.assertLessEqual(len(core_lines), 40)
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("*.cmd text eol=crlf", attributes)
         self.assertIn("*.sh text eol=lf", attributes)
 
-    def test_compatibility_wrappers_expose_the_new_cli(self) -> None:
+    def test_platform_wrappers_expose_the_cli(self) -> None:
         script_names = (
             "install-rules",
-            "agent-install-rules",
             "uninstall-rules",
             "validate-installed-project",
             "validate-rules-template",
@@ -35,7 +35,6 @@ class ContractTests(unittest.TestCase):
 
         commands = {
             "install-rules": "install",
-            "agent-install-rules": "install",
             "uninstall-rules": "remove",
             "validate-installed-project": "doctor",
             "validate-rules-template": "validate-template",
@@ -72,6 +71,14 @@ class ContractTests(unittest.TestCase):
                 0,
                 run_wrapper(ROOT / "tests/run.cmd", "--help").returncode,
             )
+
+    def test_install_has_one_mode_and_defaults_to_the_current_directory(self) -> None:
+        help_text = run_cli("install", "--help").stdout
+        self.assertIn("default: current directory", help_text)
+        self.assertNotIn("--profile", help_text)
+        self.assertNotIn("--agents", help_text)
+        self.assertNotIn("--upgrade", help_text)
+        self.assertNotIn("--force", help_text)
 
 
 if __name__ == "__main__":

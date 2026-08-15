@@ -18,14 +18,16 @@ ROOT = Path(__file__).resolve().parents[1]
 MIN_PYTHON = (3, 9)
 VERSION_FILE = ROOT / "VERSION"
 CORE_TEMPLATE = ROOT / "templates/core/AGENTS.md"
-SKILLS_TEMPLATE = ROOT / "templates/skills"
+OBSOLETE_SKILLS_TEMPLATE = ROOT / "templates/skills"
 MANIFEST_PATH = Path(".relay/manifest.json")
 BLOCK_START = "<!-- relay-rules:start -->"
 BLOCK_END = "<!-- relay-rules:end -->"
 CLAUDE_BODY = "@AGENTS.md"
-SKILL_NAMES = ("relay-implement", "relay-review", "relay-release-safety")
-PROFILES = ("core", "standard")
-AGENT_CHOICES = ("both", "codex", "claude")
+PREVIOUS_OPTIONAL_SKILL_NAMES = (
+    "relay-implement",
+    "relay-review",
+    "relay-release-safety",
+)
 
 LEGACY_SKILL_NAMES = (
     "adapt-rules",
@@ -246,25 +248,12 @@ def load_json(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
-def agent_list(choice: str) -> list[str]:
-    if choice == "both":
-        return ["claude", "codex"]
-    return [choice]
-
-
-def desired_owned_files(profile: str, agents: list[str]) -> list[str]:
-    if profile == "core":
-        return []
-    owned: list[str] = []
-    if "claude" in agents:
-        owned.extend(f".claude/skills/{name}/SKILL.md" for name in SKILL_NAMES)
-    if "codex" in agents:
-        owned.extend(f".agents/skills/{name}/SKILL.md" for name in SKILL_NAMES)
-    return sorted(owned)
-
-
 def all_known_owned_files() -> set[str]:
-    return set(desired_owned_files("standard", ["claude", "codex"]))
+    return {
+        f"{root}/{name}/SKILL.md"
+        for root in (".claude/skills", ".agents/skills")
+        for name in PREVIOUS_OPTIONAL_SKILL_NAMES
+    }
 
 
 def validate_owned_files(value: Any) -> list[str]:
@@ -286,31 +275,7 @@ def validate_block_files(value: Any) -> list[str]:
     return list(value)
 
 
-def canonical_skill(rel: str) -> Path:
-    parts = Path(rel).parts
-    if len(parts) != 4 or parts[-1] != "SKILL.md":
-        raise RelayError(f"Invalid owned skill path: {rel}")
-    name = parts[-2]
-    if name not in SKILL_NAMES:
-        raise RelayError(f"Unknown Relay skill: {name}")
-    return SKILLS_TEMPLATE / name / "SKILL.md"
-
-
-def expected_manifest(profile: str, agents: list[str]) -> dict[str, Any]:
-    block_files = ["AGENTS.md"]
-    if "claude" in agents:
-        block_files.append("CLAUDE.md")
-    return {
-        "schema": 1,
-        "version": version(),
-        "profile": profile,
-        "agents": agents,
-        "blockFiles": block_files,
-        "ownedFiles": desired_owned_files(profile, agents),
-    }
-
-
-def manifest_text(data: dict[str, Any]) -> str:
+def json_text(data: dict[str, Any]) -> str:
     return json.dumps(data, indent=2, ensure_ascii=True) + "\n"
 
 
@@ -378,7 +343,7 @@ def merge_restored_json(source: Path, destination: Path, target: Path) -> None:
     base = load_json(source, label="pre-install JSON")
     current = load_json(destination, label="current JSON")
     merged = merge_dicts(base, current)
-    write_text(destination, manifest_text(merged), dry_run=False, target=target)
+    write_text(destination, json_text(merged), dry_run=False, target=target)
 
 
 def cleaned_hook_config(path: Path) -> str | None | bool:
@@ -444,6 +409,8 @@ def legacy_cleanup_paths() -> list[str]:
     paths = [*LEGACY_CLAUDE_FILES, *LEGACY_CODEX_FILES, *LEGACY_SCRIPT_FILES]
     paths.extend(f".claude/skills/{name}" for name in LEGACY_SKILL_NAMES)
     paths.extend(f".agents/skills/{name}" for name in LEGACY_SKILL_NAMES)
+    paths.extend(f".claude/skills/{name}" for name in PREVIOUS_OPTIONAL_SKILL_NAMES)
+    paths.extend(f".agents/skills/{name}" for name in PREVIOUS_OPTIONAL_SKILL_NAMES)
     return paths
 
 
@@ -522,68 +489,36 @@ def install(args: argparse.Namespace) -> int:
     if legacy.exists():
         migrate_legacy(target, dry_run=args.dry_run)
         if args.dry_run:
-            print(f"[dry-run] install {args.profile} profile for {args.agents}")
+            print(f"[dry-run] install Relay Rules in {target}")
             return 0
 
     manifest_path = target / MANIFEST_PATH
-    old_manifest: dict[str, Any] | None = None
     old_owned: list[str] = []
     if manifest_path.exists():
-        old_manifest = load_json(manifest_path, label="Relay manifest")
-        old_owned = validate_owned_files(old_manifest.get("ownedFiles", []))
-        validate_block_files(old_manifest.get("blockFiles", []))
+        manifest = load_json(manifest_path, label="Relay manifest")
+        old_owned = validate_owned_files(manifest.get("ownedFiles", []))
+        validate_block_files(manifest.get("blockFiles", []))
 
-    agents = agent_list(args.agents)
-    desired = expected_manifest(args.profile, agents)
-    desired_owned = desired["ownedFiles"]
-
-    block_paths = [target / "AGENTS.md"]
-    if "claude" in agents or (
-        old_manifest and "CLAUDE.md" in old_manifest.get("blockFiles", [])
-    ):
-        block_paths.append(target / "CLAUDE.md")
+    block_paths = [target / "AGENTS.md", target / "CLAUDE.md"]
     for path in block_paths:
         ensure_safe_path(path, target)
         if path.exists():
             block_span(read_text(path), path)
     for rel in old_owned:
         ensure_safe_path(target / rel, target, allow_leaf_symlink=True)
-    for rel in desired_owned:
-        destination = target / rel
-        ensure_safe_path(destination, target)
-        source_content = normalized_text(canonical_skill(rel))
-        if destination.exists() and rel not in old_owned and read_text(destination) != source_content:
-            raise RelayError(
-                f"Unmanaged file conflicts with the {args.profile} profile: {destination}"
-            )
 
-    for rel in sorted(set(old_owned) - set(desired_owned)):
+    for rel in old_owned:
         path = target / rel
         if remove_path(path, dry_run=args.dry_run, target=target) and not args.dry_run:
             prune_empty_parents(path.parent, target)
 
     core_body = normalized_text(CORE_TEMPLATE).rstrip()
     set_managed_block(target / "AGENTS.md", core_body, dry_run=args.dry_run, target=target)
-    if "claude" in agents:
-        set_managed_block(target / "CLAUDE.md", CLAUDE_BODY, dry_run=args.dry_run, target=target)
-    elif old_manifest and "CLAUDE.md" in old_manifest.get("blockFiles", []):
-        remove_managed_block(target / "CLAUDE.md", dry_run=args.dry_run, target=target)
-
-    for rel in desired_owned:
-        destination = target / rel
-        source_content = normalized_text(canonical_skill(rel))
-        write_text(destination, source_content, dry_run=args.dry_run, target=target)
-
-    write_text(
-        manifest_path,
-        manifest_text(desired),
-        dry_run=args.dry_run,
-        target=target,
-    )
+    set_managed_block(target / "CLAUDE.md", CLAUDE_BODY, dry_run=args.dry_run, target=target)
+    if remove_path(manifest_path, dry_run=args.dry_run, target=target) and not args.dry_run:
+        prune_empty_parents(manifest_path.parent, target)
     prefix = "Would install" if args.dry_run else "Installed"
-    print(f"{prefix} Relay Rules {version()} ({args.profile}, {args.agents}) in {target}")
-    if args.upgrade or args.force or args.bootstrap or args.no_backup:
-        print("Note: legacy install flags are accepted for compatibility; migration backups remain mandatory.")
+    print(f"{prefix} Relay Rules {version()} in {target}")
     return 0
 
 
@@ -598,16 +533,20 @@ def remove(args: argparse.Namespace) -> int:
         return 0
 
     manifest_path = target / MANIFEST_PATH
-    if not manifest_path.exists():
-        raise RelayError(f"No Relay Rules install found: {manifest_path}")
-    manifest = load_json(manifest_path, label="Relay manifest")
-    owned = validate_owned_files(manifest.get("ownedFiles", []))
+    owned: list[str] = []
+    if manifest_path.exists():
+        manifest = load_json(manifest_path, label="Relay manifest")
+        owned = validate_owned_files(manifest.get("ownedFiles", []))
+        validate_block_files(manifest.get("blockFiles", []))
 
+    has_managed_block = False
     for name in ("AGENTS.md", "CLAUDE.md"):
         path = target / name
         ensure_safe_path(path, target)
         if path.exists():
-            block_span(read_text(path), path)
+            has_managed_block = block_span(read_text(path), path) is not None or has_managed_block
+    if not manifest_path.exists() and not has_managed_block:
+        raise RelayError(f"No Relay Rules install found in {target}")
     for rel in owned:
         ensure_safe_path(target / rel, target, allow_leaf_symlink=True)
 
@@ -617,8 +556,8 @@ def remove(args: argparse.Namespace) -> int:
         path = target / rel
         if remove_path(path, dry_run=args.dry_run, target=target) and not args.dry_run:
             prune_empty_parents(path.parent, target)
-    remove_path(manifest_path, dry_run=args.dry_run, target=target)
-    if not args.dry_run:
+    removed_manifest = remove_path(manifest_path, dry_run=args.dry_run, target=target)
+    if removed_manifest and not args.dry_run:
         prune_empty_parents(manifest_path.parent, target)
     prefix = "Would remove" if args.dry_run else "Removed"
     print(f"{prefix} Relay Rules from {target}; unrelated project files were preserved.")
@@ -639,65 +578,27 @@ def exact_block(path: Path, body: str) -> str | None:
 
 
 def doctor(args: argparse.Namespace) -> int:
-    if args.target and args.target_path:
-        raise RelayError("Use either positional target_path or --target, not both")
-    raw_target = args.target or args.target_path
-    if not raw_target:
-        raise RelayError("Missing target project path")
-    target = target_path(raw_target, create=False)
+    target = target_path(args.target, create=False)
     issues: list[str] = []
     ensure_safe_path(target / MANIFEST_PATH, target)
     if (target / ".agent/rules-kit.json").exists():
         issues.append("legacy install detected; run install again to migrate it")
     manifest_path = target / MANIFEST_PATH
-    if not manifest_path.exists():
-        issues.append(f"missing {MANIFEST_PATH}")
-        manifest = None
-    else:
+    if manifest_path.exists():
         try:
             manifest = load_json(manifest_path, label="Relay manifest")
+            validate_block_files(manifest.get("blockFiles", []))
+            validate_owned_files(manifest.get("ownedFiles", []))
         except RelayError as exc:
             issues.append(str(exc))
-            manifest = None
+        issues.append("obsolete .relay/manifest.json remains; run install to remove it")
 
-    if manifest is not None:
-        profile = manifest.get("profile")
-        agents = manifest.get("agents")
-        if profile not in PROFILES:
-            issues.append(f"invalid profile: {profile!r}")
-        if (
-            not isinstance(agents, list)
-            or not agents
-            or any(agent not in ("claude", "codex") for agent in agents)
-            or len(set(agents)) != len(agents)
-        ):
-            issues.append(f"invalid agents list: {agents!r}")
-        elif profile in PROFILES:
-            expected = expected_manifest(profile, agents)
-            for key in ("schema", "version", "blockFiles", "ownedFiles"):
-                if manifest.get(key) != expected[key]:
-                    issues.append(f"manifest field {key} differs from expected value")
-
-            issue = exact_block(target / "AGENTS.md", normalized_text(CORE_TEMPLATE).rstrip())
-            if issue:
-                issues.append(issue)
-            if "claude" in agents:
-                issue = exact_block(target / "CLAUDE.md", CLAUDE_BODY)
-                if issue:
-                    issues.append(issue)
-
-            try:
-                owned = validate_owned_files(manifest.get("ownedFiles", []))
-            except RelayError as exc:
-                issues.append(str(exc))
-                owned = []
-            for rel in owned:
-                installed = target / rel
-                source = canonical_skill(rel)
-                if not installed.is_file():
-                    issues.append(f"missing owned file: {rel}")
-                elif read_text(installed) != normalized_text(source):
-                    issues.append(f"owned file differs: {rel}")
+    issue = exact_block(target / "AGENTS.md", normalized_text(CORE_TEMPLATE).rstrip())
+    if issue:
+        issues.append(issue)
+    issue = exact_block(target / "CLAUDE.md", CLAUDE_BODY)
+    if issue:
+        issues.append(issue)
 
     if issues:
         print("Relay Rules doctor found problems:", file=sys.stderr)
@@ -721,16 +622,8 @@ def validate_template(_args: argparse.Namespace) -> int:
             issues.append("core template must not contain managed-block markers")
         if len(core.splitlines()) > 40:
             issues.append("core AGENTS template exceeds 40 lines")
-    for name in SKILL_NAMES:
-        path = SKILLS_TEMPLATE / name / "SKILL.md"
-        if not path.is_file():
-            issues.append(f"missing skill template: {path.relative_to(ROOT)}")
-            continue
-        text = normalized_text(path)
-        if not text.startswith("---\n") or f"name: {name}\n" not in text:
-            issues.append(f"invalid skill frontmatter: {path.relative_to(ROOT)}")
-        if len(text.splitlines()) > 80:
-            issues.append(f"skill template exceeds 80 lines: {path.relative_to(ROOT)}")
+    if OBSOLETE_SKILLS_TEMPLATE.exists():
+        issues.append("obsolete templates/skills tree still exists")
     if (ROOT / "templates/project").exists():
         issues.append("obsolete templates/project tree still exists")
     if issues:
@@ -747,31 +640,26 @@ def parser() -> argparse.ArgumentParser:
     subparsers = result.add_subparsers(dest="command", required=True)
 
     install_parser = subparsers.add_parser("install", help="install or update a project")
-    install_parser.add_argument("--target", required=True, help="project root")
-    install_parser.add_argument("--profile", choices=PROFILES, default="core")
-    install_parser.add_argument("--agents", choices=AGENT_CHOICES, default="both")
+    install_parser.add_argument(
+        "--target", default=".", help="project root (default: current directory)"
+    )
     install_parser.add_argument("--dry-run", action="store_true")
-    install_parser.add_argument("--upgrade", action="store_true", help=argparse.SUPPRESS)
-    install_parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
-    install_parser.add_argument("--bootstrap", action="store_true", help=argparse.SUPPRESS)
-    install_parser.add_argument("--no-backup", action="store_true", help=argparse.SUPPRESS)
     install_parser.set_defaults(handler=install)
 
     remove_parser = subparsers.add_parser(
         "remove", aliases=["uninstall"], help="remove managed files"
     )
-    remove_parser.add_argument("--target", required=True, help="project root")
+    remove_parser.add_argument(
+        "--target", default=".", help="project root (default: current directory)"
+    )
     remove_parser.add_argument("--dry-run", action="store_true")
     remove_parser.set_defaults(handler=remove)
 
     doctor_parser = subparsers.add_parser(
         "doctor", help="check an installed project without writing"
     )
-    doctor_parser.add_argument("target_path", nargs="?", help="project root")
-    doctor_parser.add_argument("--target", help="project root")
-    doctor_parser.add_argument("--require-adapted", action="store_true", help=argparse.SUPPRESS)
     doctor_parser.add_argument(
-        "--require-candidates-reviewed", action="store_true", help=argparse.SUPPRESS
+        "--target", default=".", help="project root (default: current directory)"
     )
     doctor_parser.set_defaults(handler=doctor)
 

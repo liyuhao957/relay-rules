@@ -11,17 +11,17 @@ from lib import ROOT, file_paths, run_cli, run_wrapper, tree_snapshot, write
 
 
 class LifecycleTests(unittest.TestCase):
-    def test_core_install_is_three_files_on_an_empty_project(self) -> None:
+    def test_install_is_two_files_and_defaults_to_the_current_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / "project with spaces"
             target.mkdir()
-            run_cli("install", "--target", str(target))
+            run_cli("install", cwd=target)
             self.assertEqual(
-                {"AGENTS.md", "CLAUDE.md", ".relay/manifest.json"},
+                {"AGENTS.md", "CLAUDE.md"},
                 file_paths(target),
             )
-            run_cli("doctor", "--target", str(target))
-            run_cli("remove", "--target", str(target))
+            run_cli("doctor", cwd=target)
+            run_cli("remove", cwd=target)
             self.assertEqual(set(), file_paths(target))
 
     def test_existing_content_is_preserved_and_updates_are_idempotent(self) -> None:
@@ -56,6 +56,19 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue((target / ".agents/skills/custom/SKILL.md").is_file())
             self.assertTrue((target / ".claude/settings.json").is_file())
 
+    def test_platform_wrapper_installs_the_current_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp)
+            suffix = ".cmd" if os.name == "nt" else ".sh"
+            run_wrapper(ROOT / f"scripts/install-rules{suffix}", cwd=target)
+            self.assertEqual(
+                {"AGENTS.md", "CLAUDE.md"},
+                file_paths(target),
+            )
+            run_wrapper(ROOT / f"scripts/validate-installed-project{suffix}", cwd=target)
+            run_wrapper(ROOT / f"scripts/uninstall-rules{suffix}", cwd=target)
+            self.assertEqual(set(), file_paths(target))
+
     def test_crlf_content_is_restored_byte_for_byte(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp)
@@ -74,34 +87,43 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(original_agents, agents.read_bytes())
             self.assertEqual(original_claude, claude.read_bytes())
 
-    def test_standard_profile_can_be_added_and_removed_cleanly(self) -> None:
+    def test_previous_optional_skills_are_removed_on_update(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp)
+            run_cli("install", "--target", str(target))
             write(target / ".agents/skills/custom/SKILL.md", "custom\n")
-            run_cli("install", "--target", str(target), "--profile", "standard")
-            manifest = json.loads((target / ".relay/manifest.json").read_text())
-            self.assertEqual(6, len(manifest["ownedFiles"]))
-            for rel in manifest["ownedFiles"]:
-                self.assertTrue((target / rel).is_file(), rel)
-
-            run_cli("install", "--target", str(target), "--profile", "core")
-            self.assertTrue((target / ".agents/skills/custom/SKILL.md").is_file())
-            for rel in manifest["ownedFiles"]:
-                self.assertFalse((target / rel).exists(), rel)
-
-            run_cli(
-                "install",
-                "--target",
-                str(target),
-                "--profile",
-                "standard",
-                "--agents",
-                "codex",
+            owned = sorted(
+                f".{agent}/skills/{name}/SKILL.md"
+                for agent in ("claude", "agents")
+                for name in (
+                    "relay-implement",
+                    "relay-review",
+                    "relay-release-safety",
+                )
             )
-            self.assertFalse((target / "CLAUDE.md").exists())
-            codex_manifest = json.loads((target / ".relay/manifest.json").read_text())
-            self.assertEqual(3, len(codex_manifest["ownedFiles"]))
-            self.assertTrue(all(path.startswith(".agents/") for path in codex_manifest["ownedFiles"]))
+            for rel in owned:
+                write(target / rel, "old Relay skill\n")
+            write(
+                target / ".relay/manifest.json",
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "version": "0.4.0",
+                        "profile": "standard",
+                        "agents": ["claude", "codex"],
+                        "blockFiles": ["AGENTS.md", "CLAUDE.md"],
+                        "ownedFiles": owned,
+                    }
+                )
+                + "\n",
+            )
+
+            run_cli("install", "--target", str(target))
+            self.assertTrue((target / ".agents/skills/custom/SKILL.md").is_file())
+            self.assertFalse((target / ".relay/manifest.json").exists())
+            for rel in owned:
+                self.assertFalse((target / rel).exists(), rel)
+            run_cli("doctor", "--target", str(target))
 
             run_cli("remove", "--target", str(target))
             self.assertEqual({".agents/skills/custom/SKILL.md"}, file_paths(target))
@@ -132,25 +154,30 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertIn("managed block differs", result.stderr)
 
-    def test_unmanaged_profile_collision_fails_before_writing(self) -> None:
+    def test_removed_install_modes_are_rejected_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp)
-            write(
-                target / ".agents/skills/relay-implement/SKILL.md",
-                "user-owned skill\n",
+            removed_options = (
+                ("--profile", "standard"),
+                ("--agents", "codex"),
+                ("--upgrade",),
+                ("--force",),
+                ("--bootstrap",),
+                ("--no-backup",),
             )
-            before = tree_snapshot(target)
-            result = run_cli(
-                "install",
-                "--target",
-                str(target),
-                "--profile",
-                "standard",
-                check=False,
-            )
-            self.assertEqual(1, result.returncode)
-            self.assertIn("Unmanaged file conflicts", result.stderr)
-            self.assertEqual(before, tree_snapshot(target))
+            for options in removed_options:
+                with self.subTest(option=options[0]):
+                    before = tree_snapshot(target)
+                    result = run_cli(
+                        "install",
+                        "--target",
+                        str(target),
+                        *options,
+                        check=False,
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("unrecognized arguments", result.stderr)
+                    self.assertEqual(before, tree_snapshot(target))
 
     def test_install_refuses_managed_paths_through_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -189,19 +216,19 @@ class LifecycleTests(unittest.TestCase):
             uninstall = kit / "scripts/uninstall-rules.cmd"
 
             before_dry_run = tree_snapshot(target)
-            run_wrapper(install, "--target", str(target), "--dry-run")
+            run_wrapper(install, "--dry-run", cwd=target)
             self.assertEqual(before_dry_run, tree_snapshot(target))
 
-            run_wrapper(install, "--target", str(target), "--profile", "standard")
+            run_wrapper(install, cwd=target)
             installed = tree_snapshot(target)
-            run_wrapper(install, "--target", str(target), "--profile", "standard")
+            run_wrapper(install, cwd=target)
             self.assertEqual(installed, tree_snapshot(target))
 
             before_doctor = tree_snapshot(target)
-            run_wrapper(doctor, str(target))
+            run_wrapper(doctor, cwd=target)
             self.assertEqual(before_doctor, tree_snapshot(target))
 
-            run_wrapper(uninstall, "--target", str(target))
+            run_wrapper(uninstall, cwd=target)
             self.assertEqual("# Existing Windows rules\n", (target / "AGENTS.md").read_text())
             self.assertEqual({"AGENTS.md"}, file_paths(target))
 

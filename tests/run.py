@@ -16,13 +16,11 @@ ROOT = HERE.parent
 SUITES = ("contract", "lifecycle", "migration", "selection")
 WRAPPERS = {
     "scripts/install-rules.sh",
-    "scripts/agent-install-rules.sh",
     "scripts/uninstall-rules.sh",
     "scripts/validate-installed-project.sh",
     "scripts/validate-rules-template.sh",
     "scripts/relay.cmd",
     "scripts/install-rules.cmd",
-    "scripts/agent-install-rules.cmd",
     "scripts/uninstall-rules.cmd",
     "scripts/validate-installed-project.cmd",
     "scripts/validate-rules-template.cmd",

@@ -4,30 +4,11 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-**Shared project rules for Claude Code and Codex. Three files by default, one source of truth, no workflow framework.**
+**One command. Two files. One shared rule set for Claude Code and Codex.**
 
-Relay Rules keeps the instructions that matter in both tools without taking over your repository:
+Relay Rules does one thing: it puts the same short engineering rules where both coding agents can read them. There are no profiles, agent selectors, hooks, background services, generated project maps, or package dependencies.
 
-- **Small by default.** An empty project gets exactly three files.
-- **Native to both agents.** Codex reads `AGENTS.md`; Claude Code imports it through `CLAUDE.md`.
-- **Reversible.** Existing rules stay intact, updates are idempotent, and removal touches only Relay-managed content.
-- **Cross-platform.** The same Python core runs behind thin macOS, Linux, and Windows launchers.
-
-## What It Adds
-
-The default `--profile core --agents both` install creates:
-
-```text
-AGENTS.md              Relay Rules managed block
-CLAUDE.md              managed @AGENTS.md import
-.relay/manifest.json   relative ownership metadata
-```
-
-Existing `AGENTS.md` and `CLAUDE.md` content is preserved. Relay Rules owns only the text between its markers, never either whole file or an agent configuration directory.
-
-The optional `standard` profile adds three focused skills per selected agent. Nothing else is installed.
-
-## Quick Start
+## Install
 
 Clone Relay Rules once:
 
@@ -35,122 +16,117 @@ Clone Relay Rules once:
 git clone https://github.com/liyuhao957/relay-rules.git
 ```
 
+Then open your project directory and run one command.
+
 macOS / Linux:
 
 ```bash
-/path/to/relay-rules/scripts/install-rules.sh --target /path/to/project
+/path/to/relay-rules/scripts/install-rules.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-& "C:\path\to\relay-rules\scripts\install-rules.cmd" --target "C:\path\to\project"
+& "C:\path\to\relay-rules\scripts\install-rules.cmd"
 ```
 
 Windows Command Prompt:
 
 ```bat
-"C:\path\to\relay-rules\scripts\install-rules.cmd" --target "C:\path\to\project"
+"C:\path\to\relay-rules\scripts\install-rules.cmd"
 ```
 
-Run the same platform command to update. Both wrappers call the same Python CLI, are idempotent, and do not require `--force` or `--upgrade`.
+That is the complete installation. Run the same command again whenever Relay Rules changes; installation and updates are the same idempotent operation.
 
-Add `--dry-run` to preview without writing:
+To install into another directory without changing directories, add `--target`:
 
 ```bash
-/path/to/relay-rules/scripts/install-rules.sh --target /path/to/project --dry-run
+/path/to/relay-rules/scripts/install-rules.sh --target /path/to/project
 ```
 
-On Windows, replace `install-rules.sh` with `install-rules.cmd`.
+Add `--dry-run` to preview changes without writing anything.
 
-The default is `--profile core --agents both`. Select one agent when needed:
+## What It Adds
 
-```bash
-scripts/install-rules.sh --target /path/to/project --agents codex
-scripts/install-rules.sh --target /path/to/project --agents claude
+An empty project gets exactly two files:
+
+```text
+AGENTS.md              shared rules read directly by Codex
+CLAUDE.md              managed @AGENTS.md import for Claude Code
 ```
 
-The same flags work with `scripts\install-rules.cmd` on Windows.
+Existing `AGENTS.md` and `CLAUDE.md` content is preserved. Relay Rules owns only the text between its markers, never either whole file. Project-specific instructions belong outside those markers and remain untouched.
 
-## Choose a Profile
+The shared rules tell both agents to:
 
-`core` is the default. It installs only the shared rules, manifest, and Claude import shown above.
+- verify important claims against current code, configuration, tests, and tool output;
+- keep changes focused and preserve unrelated work;
+- test the affected behavior and report what was actually verified;
+- confirm the exact scope before consequential external actions.
 
-`standard` additionally installs three focused, on-demand skills for implementation, review, and release safety:
+Relay Rules does not share conversations or private memory between agents. It gives them the same written working agreement.
+
+## Check and Remove
+
+From the installed project directory, check the installation without changing files:
 
 ```bash
-scripts/install-rules.sh --target /path/to/project --profile standard
+/path/to/relay-rules/scripts/validate-installed-project.sh
 ```
 
-Windows uses `scripts\install-rules.cmd` with the same `--profile` value.
+Windows PowerShell:
 
-Claude receives them under `.claude/skills/`; Codex receives them under `.agents/skills/`. The source templates live in one canonical tree in this repository.
+```powershell
+& "C:\path\to\relay-rules\scripts\validate-installed-project.cmd"
+```
 
-## Check and remove
-
-`doctor` is read-only:
+Remove only Relay-managed content:
 
 ```bash
-scripts/validate-installed-project.sh /path/to/project
+/path/to/relay-rules/scripts/uninstall-rules.sh
 ```
 
 ```powershell
-.\scripts\validate-installed-project.cmd "C:\path\to\project"
-```
-
-Remove only the managed blocks, manifest, and optional Relay skills:
-
-```bash
-scripts/uninstall-rules.sh --target /path/to/project
-```
-
-```powershell
-.\scripts\uninstall-rules.cmd --target "C:\path\to\project"
+& "C:\path\to\relay-rules\scripts\uninstall-rules.cmd"
 ```
 
 Unrelated rules, settings, hooks, and skills remain untouched.
 
-## Migrating from 0.3.x
+## Updating Older Installs
 
-The normal install command detects `.agent/rules-kit.json` and migrates automatically. Before changing anything it copies the legacy managed state to:
+Running the normal install command also simplifies older Relay Rules installations:
 
-```text
-.rules-kit/backups/relay-migrate-<timestamp>/
-```
+- A `0.4.x` install is reduced to the same two-file footprint. Its old manifest and optional skills previously owned by Relay Rules are removed; custom skills are preserved.
+- A `0.3.x` install is backed up before migration to `.rules-kit/backups/relay-migrate-<timestamp>/`. Known Relay hooks and files are removed, pre-install files are restored where available, and unrelated Claude/Codex configuration is preserved.
 
-It restores the pre-install files recorded by the old installer, removes known Relay hooks and files, preserves unrelated Claude/Codex configuration, then installs the selected 0.4 profile. Adapted legacy documents remain in the migration backup for reference. Invalid hook JSON fails before any migration write.
+If legacy hook JSON is invalid, migration stops before writing anything rather than leaving a partial installation.
+
+## Why This Shape
+
+The integration uses each product's native instruction mechanism:
+
+- Claude Code supports concise project memory in `CLAUDE.md` and `@AGENTS.md` imports: [official memory documentation](https://code.claude.com/docs/en/memory).
+- Codex loads hierarchical `AGENTS.md` instructions: [official AGENTS.md documentation](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
+
+The small cross-agent distribution model also follows the useful part of maintained projects such as [Ruler](https://github.com/intellectronica/ruler), while deliberately avoiding a second workflow framework on top of the agents themselves.
 
 ## Tests
 
-The canonical test runner is cross-platform and change-aware:
-
 ```bash
-python tests/run.py                    # suites selected from the current diff
-python tests/run.py --suite lifecycle  # one explicit suite
-python tests/run.py --all              # complete regression
+python tests/run.py
+python tests/run.py --all
 ```
 
-`tests/run.sh` and `tests\run.cmd` are equivalent convenience wrappers. Changes to the shared CLI automatically select all suites. Documentation, wrappers, templates, and individual tests select only their mapped checks. CI runs the complete suite on Windows, macOS, and Linux with Python 3.9 and 3.13.
-
-## Why this shape
-
-The integration follows both products' native loading model:
-
-- Claude Code documents concise project memory in `CLAUDE.md`, supports `@AGENTS.md` imports, and discovers project skills under `.claude/skills/`: [memory](https://code.claude.com/docs/en/memory), [skills](https://code.claude.com/docs/en/skills), [plugins](https://code.claude.com/docs/en/plugins).
-- Codex loads hierarchical `AGENTS.md` instructions and discovers repository skills under `.agents/skills/`: [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md), [skills](https://learn.chatgpt.com/docs/build-skills).
-
-The redesign also takes cues from maintained projects: [Ruler](https://github.com/intellectronica/ruler) for cross-agent rule distribution, [OpenSpec](https://github.com/Fission-AI/OpenSpec) for opt-in profiles, [Spec Kit](https://github.com/github/spec-kit) for optional extensions, and [Superpowers](https://github.com/obra/superpowers) for relying on native skill discovery as clients mature.
-
-Relay Rules deliberately does not install hooks, candidate inboxes, scanners, generated project maps, or mandatory handoff documents. Those mechanisms cost more context and maintenance than they return for ordinary repository work. Tool-specific automation can still be added by a project or packaged separately as a Claude/Codex plugin when it has a concrete use case.
+CI runs the complete suite on Windows, macOS, and Linux with Python 3.9 and 3.13. Windows jobs also execute the PowerShell and Command Prompt entry points directly.
 
 ## Requirements
 
 - Python 3.9 or newer
 - Windows: PowerShell or Command Prompt; Python available as `python` or `py`
 - macOS / Linux: Bash for the convenience wrappers
-- No Python packages or runtime dependencies
+- No third-party Python packages
 
-Normal Windows installation does not create symlinks and needs neither administrator rights nor Developer Mode. Restoring a legacy pre-install backup that itself contains symlinks remains subject to Windows symlink permissions.
+Normal Windows installation needs no administrator rights, Developer Mode, or symbolic links.
 
 ## License
 

@@ -87,6 +87,7 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn("old Relay Rules AGENTS", agents)
             self.assertIn("<!-- relay-rules:start -->", agents)
             self.assertFalse((target / ".agent").exists())
+            self.assertFalse((target / ".relay/manifest.json").exists())
             self.assertFalse((target / "scripts/check-doc-drift.py").exists())
             self.assertFalse((target / ".claude/skills/implement").exists())
             self.assertTrue((target / ".claude/skills/custom/SKILL.md").is_file())

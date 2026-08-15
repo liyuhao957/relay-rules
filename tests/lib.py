@@ -15,11 +15,12 @@ def run_cli(
     *args: str,
     check: bool = True,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(CLI), *map(str, args)]
     result = subprocess.run(
         command,
-        cwd=ROOT,
+        cwd=cwd or ROOT,
         env={**os.environ, "PYTHONUTF8": "1", **(env or {})},
         encoding="utf-8",
         stdout=subprocess.PIPE,
@@ -38,6 +39,7 @@ def run_wrapper(
     path: Path,
     *args: str,
     check: bool = True,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     values = [str(path), *map(str, args)]
     command: list[str] | str = values
@@ -46,7 +48,7 @@ def run_wrapper(
         command = subprocess.list2cmdline(values)
     result = subprocess.run(
         command,
-        cwd=ROOT,
+        cwd=cwd or ROOT,
         encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
