@@ -1,53 +1,95 @@
-"""Shared helpers for the Relay Rules test suite (stdlib only)."""
-
 from __future__ import annotations
 
-import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE = REPO_ROOT / "templates" / "project"
-BASH_GUARD = TEMPLATE / ".claude" / "hooks" / "pre_bash_release_guard.py"
-STOP_HOOK = TEMPLATE / ".claude" / "hooks" / "stop_quality_reminder.py"
+from typing import Iterable
 
 
-def run_hook(hook_path: Path, payload: object, cwd: Path | None = None, env: dict | None = None):
-    """Run a hook with a JSON payload on stdin. Returns (exit_code, stdout, stderr)."""
-    raw = payload if isinstance(payload, str) else json.dumps(payload)
-    proc = subprocess.run(
-        [sys.executable, str(hook_path)],
-        input=raw,
-        capture_output=True,
-        text=True,
-        cwd=str(cwd) if cwd else None,
-        env=env,
+ROOT = Path(__file__).resolve().parents[1]
+CLI = ROOT / "scripts/relay.py"
+
+
+def run_cli(
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(CLI), *map(str, args)]
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env={**os.environ, "PYTHONUTF8": "1", **(env or {})},
+        encoding="utf-8",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
     )
-    return proc.returncode, proc.stdout, proc.stderr
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"command failed ({result.returncode}): {' '.join(command)}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
 
 
-def bash_payload(command: str) -> dict:
-    return {"tool_name": "Bash", "tool_input": {"command": command}}
+def run_wrapper(
+    path: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    values = [str(path), *map(str, args)]
+    command: list[str] | str = values
+    use_shell = os.name == "nt"
+    if use_shell:
+        command = subprocess.list2cmdline(values)
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        encoding="utf-8",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=use_shell,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"wrapper failed ({result.returncode}): {values}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
 
 
-class Results:
-    def __init__(self) -> None:
-        self.passed = 0
-        self.failed = 0
-        self.failures: list[str] = []
+def file_paths(root: Path) -> set[str]:
+    return {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
 
-    def check(self, name: str, ok: bool, detail: str = "") -> None:
-        if ok:
-            self.passed += 1
-        else:
-            self.failed += 1
-            self.failures.append(f"{name}: {detail}".rstrip(": "))
 
-    def report(self, suite: str) -> int:
-        total = self.passed + self.failed
-        status = "OK" if self.failed == 0 else "FAIL"
-        print(f"[{status}] {suite}: {self.passed}/{total} passed")
-        for failure in self.failures:
-            print(f"    - {failure}")
-        return 0 if self.failed == 0 else 1
+def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
+    snapshot: dict[str, tuple[bytes, int]] = {}
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            snapshot[path.relative_to(root).as_posix()] = (
+                path.read_bytes(),
+                path.stat().st_mtime_ns,
+            )
+    return snapshot
+
+
+def write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def output_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def assert_contains_all(text: str, values: Iterable[str]) -> None:
+    for value in values:
+        if value not in text:
+            raise AssertionError(f"expected {value!r} in:\n{text}")
