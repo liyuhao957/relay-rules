@@ -76,8 +76,8 @@ class MigrationTests(unittest.TestCase):
 
             result = run_cli("install", "--target", str(target), "--dry-run")
             self.assertIn("back up legacy install", result.stdout)
-            self.assertIn("write .relay/index.md", result.stdout)
-            self.assertIn("write .relay/manifest.json", result.stdout)
+            self.assertIn(f"write {Path('.relay/index.md')}", result.stdout)
+            self.assertIn(f"write {Path('.relay/manifest.json')}", result.stdout)
             self.assertEqual(before, tree_snapshot(target))
             self.assertFalse(list((target / ".rules-kit/backups").glob("relay-migrate-*")))
 
